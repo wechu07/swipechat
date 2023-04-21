@@ -7,6 +7,9 @@ const { createAdapter, setupPrimary } = require("@socket.io/cluster-adapter");
 const { Server } = require("socket.io");
 const { info } = require("node:console");
 const express = require("express");
+// Importing redis client
+// By default the redis client connects to redis instance running at localhost:6379
+const Redis = require("ioredis");
 
 /**
  * Checking if the thread is a worker thread
@@ -47,13 +50,13 @@ if (cluster.isPrimary) {
    */
 
   console.log(`Worker ${process.pid} started`);
+  const redisClient = new Redis();
 
   /**
    * Creating Express App and Socket.io Server
    * and binding them to HTTP Server.
    */
   const app = express();
-  app.use(express.static("public"));
   const httpServer = http.createServer(app);
   const io = new Server(httpServer);
 
@@ -63,17 +66,23 @@ if (cluster.isPrimary) {
   // Setting up worker connection with the primary thread.
   setupWorker(io);
 
-  io.on("connection", (socket) => {
+  io.on("connection", async (socket) => {
+    // Fetching all the messages from redis
+    const existingMessages = await redisClient.lrange("chat_messages", 0, -1);
+
+    // Parsing the messages to JSON
+    const parsedMessages = existingMessages.map((item) => JSON.parse(item));
+
+    // Sending all the messages to the user
+    socket.emit("historical_messages", parsedMessages.reverse());
+
     // Handling socket connections.
     socket.on("message", (data) => {
       console.log(`Message arrived at ${process.pid}:`, data);
-
-      io.broadcast.emit("message", data);
+      redisClient.lpush("chat_messages", JSON.stringify(data));
+      io.emit("message", data);
     });
   });
 
-  // Handle HTTP Requests
-  app.get("/", (req, res) => {
-    res.send("Hello world");
-  });
+  app.use(express.static("public"));
 }
